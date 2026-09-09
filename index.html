@@ -927,5 +927,414 @@ try{
 }catch(_){ }
 </script>
 
+
+<style id="moca-v7-style">
+.v7-stem{font-size:21px;font-weight:900;line-height:1.6;letter-spacing:-.35px;margin:10px 0 18px;color:var(--text);white-space:pre-wrap}
+.v7-retry{border:1px solid #f0d7a2;background:#fff9eb;border-radius:14px;padding:18px;line-height:1.65;color:#765615}.v7-retry b{display:block;margin-bottom:5px;color:#5c410f}
+.v4-note{display:none!important}.v4-choices{margin-top:0}.v4-choice{font-size:17px;line-height:1.62;padding:15px 16px}.v4-choice .n{font-size:20px}
+@media(max-width:580px){.v7-stem{font-size:19px}.v4-choice{font-size:16px;padding:13px 12px}}
+</style>
+
+<script id="moca-v7-script">
+// ===== MOCA TEXT v7 =====
+// Strict clean mode: use Tesseract line boxes to rebuild stem + exactly four choices.
+// Never show the raw OCR dump as the question screen.
+let v7LayoutLines=[];
+let v7AnswerPromise=null;
+
+function v7Text(s){
+  return String(s||'').replace(/\r/g,'').replace(/[|｜]/g,' ').replace(/[ \t]+/g,' ').trim();
+}
+function v7Median(a){
+  const x=(a||[]).filter(Number.isFinite).slice().sort((m,n)=>m-n);if(!x.length)return 0;
+  const i=Math.floor(x.length/2);return x.length%2?x[i]:(x[i-1]+x[i])/2;
+}
+function v7CleanLine(s){
+  s=v7Text(s)
+    .replace(/(?:19|20)\d{2}\.?\s*\d*\s*(?:급)?\s*(?:공채|경채|공개|채용|시험|보직).*$/,'')
+    .replace(/^\s*(?:THEME|PART)\b.*$/i,'')
+    .replace(/기출사용설명서|출제포인트|필수포인트/g,'')
+    .replace(/^\s*[·•∙▪■□◆◇※▶▷]+\s*/,'')
+    .replace(/[ \t]{2,}/g,' ')
+    .trim();
+  return s;
+}
+function v7Marker(s){
+  s=v7Text(s).replace(/^[^0-9①②③④❶❷❸❹⓵⓶⓷⓸가-힣A-Za-z]{0,4}/,'');
+  const cm={'①':1,'②':2,'③':3,'④':4,'❶':1,'❷':2,'❸':3,'❹':4,'⓵':1,'⓶':2,'⓷':3,'⓸':4};
+  let m=s.match(/^([①②③④❶❷❸❹⓵⓶⓷⓸])\s*[:.)\-]?\s*(.*)$/);if(m)return{n:cm[m[1]],text:m[2]};
+  m=s.match(/^\(?\s*([1-4])\s*[.)\]}>:\-]\s*(.*)$/);if(m)return{n:Number(m[1]),text:m[2]};
+  // OCR often leaves one junk glyph before a normal marker.
+  m=s.match(/^[^가-힣A-Za-z0-9]{0,2}([1-4])\s*[.)\]}>:\-]\s*(.*)$/);if(m)return{n:Number(m[1]),text:m[2]};
+  return null;
+}
+function v7LooksExplanation(s){
+  s=v7Text(s);return /^(?:해설|풀이|해답|정답)\b/.test(s)||/^\[?해설\]?/.test(s);
+}
+function v7SentencePieces(s){
+  s=cleanText(String(s||'').replace(/\n/g,' '));
+  if(!s)return[];
+  // Most textbook options are complete declarative sentences. Keep punctuation with the sentence.
+  let p=s.split(/(?<=[.!?。])\s+(?=[가-힣A-Za-z0-9(<ㄱ-ㅎ])/).map(v7Text).filter(Boolean);
+  if(p.length<=1){
+    p=s.split(/(?<=다\.)\s+(?=[가-힣A-Za-z0-9(<ㄱ-ㅎ])/).map(v7Text).filter(Boolean);
+  }
+  return p;
+}
+function v7StripChoiceLead(s,n){
+  s=v7Text(s);const mk=v7Marker(s);if(mk&&mk.n===n)s=mk.text;
+  return s.replace(/^\s*[①②③④❶❷❸❹⓵⓶⓷⓸]\s*/,'').replace(/^\s*\(?[1-4]\)?[.)\-:]?\s*/,'').trim();
+}
+function v7FlattenBlocks(blocks){
+  const out=[];
+  for(const b of (blocks||[]))for(const p of (b.paragraphs||[]))for(const l of (p.lines||[])){
+    const t=v7CleanLine(l.text||'');if(!t)continue;
+    let bb=l.bbox;
+    if(!bb&&l.words?.length){const xs=l.words.map(w=>w.bbox?.x0).filter(Number.isFinite),ys=l.words.map(w=>w.bbox?.y0).filter(Number.isFinite),x1=l.words.map(w=>w.bbox?.x1).filter(Number.isFinite),y1=l.words.map(w=>w.bbox?.y1).filter(Number.isFinite);if(xs.length)bb={x0:Math.min(...xs),y0:Math.min(...ys),x1:Math.max(...x1),y1:Math.max(...y1)}}
+    bb=bb||{x0:0,y0:0,x1:0,y1:0};out.push({text:t,bbox:bb});
+  }
+  return out.sort((a,b)=>Math.abs(a.bbox.y0-b.bbox.y0)>8?a.bbox.y0-b.bbox.y0:a.bbox.x0-b.bbox.x0);
+}
+async function v7OcrLayout(canvas,psm='3'){
+  const w=await ensureOcr();
+  try{await w.setParameters({tessedit_pageseg_mode:String(psm),preserve_interword_spaces:'1',user_defined_dpi:'300'})}catch(_){ }
+  const r=await w.recognize(canvas,{}, {text:true,blocks:true});
+  return {text:cleanText(r?.data?.text||''),lines:v7FlattenBlocks(r?.data?.blocks||[])};
+}
+function v7FindQuestionAnchor(lines){
+  let q=-1,qno='';
+  for(let i=0;i<lines.length;i++){
+    const t=lines[i].text;let m=t.match(/(?:^|\s)(?:문제\s*)?([0-9]{3})(?=\s|[^0-9]|$)/);
+    if(m){const n=Number(m[1]);if(n>=1&&n<1000){q=i;qno=m[1];break}}
+  }
+  let cue=-1;
+  const lo=q>=0?Math.max(0,q-6):0,hi=q>=0?Math.min(lines.length,q+8):lines.length;
+  for(let i=lo;i<hi;i++){if(v6QuestionCue(lines[i].text)&&v4HangulCount(lines[i].text)>=5){cue=i;break}}
+  if(q<0&&cue>=0)q=cue;
+  if(q<0){q=lines.findIndex(x=>v6QuestionCue(x.text)&&v4HangulCount(x.text)>=5)}
+  return {index:q,qno,cue};
+}
+function v7GroupByGaps(objs,k){
+  objs=(objs||[]).filter(x=>v7Text(x.text));if(!objs.length)return[];if(k<=1)return[[...objs]];
+  if(objs.length<=k)return objs.map(x=>[x]);
+  const hs=objs.map(x=>Math.max(1,(x.bbox.y1||0)-(x.bbox.y0||0))),mh=v7Median(hs)||20;
+  const gaps=[];for(let i=0;i<objs.length-1;i++){const g=(objs[i+1].bbox.y0||0)-(objs[i].bbox.y1||0);gaps.push({i,g,score:g/mh})}
+  const cuts=gaps.sort((a,b)=>b.score-a.score).slice(0,k-1).map(x=>x.i).sort((a,b)=>a-b);
+  const groups=[];let s=0;for(const c of cuts){groups.push(objs.slice(s,c+1));s=c+1}groups.push(objs.slice(s));
+  return groups;
+}
+function v7JoinObjs(objs){return cleanText((objs||[]).map(x=>v7CleanLine(x.text)).filter(Boolean).join(' '))}
+function v7BuildStructuredFromLines(lines,item){
+  lines=(lines||[]).map(x=>({text:v7CleanLine(x.text),bbox:x.bbox||{x0:0,y0:0,x1:0,y1:0}})).filter(x=>x.text&&!v4NoiseLine(x.text));
+  const a=v7FindQuestionAnchor(lines);if(a.index<0)return null;
+  let qno=a.qno||String(item.printed).padStart(3,'0');
+  // Keep spatial order. Start at the question sentence if found; otherwise at the numbered line.
+  let start=a.cue>=0?a.cue:a.index;
+  let arr=lines.slice(start);
+  if(!arr.length)return null;
+  // Remove question number prefix but keep its sentence.
+  arr[0]={...arr[0],text:arr[0].text.replace(/^\s*(?:문제\s*)?[0-9]{1,3}\s*/,'').trim()};
+  // If number line and question sentence were separate, prepend the cue sentence correctly.
+  if(!arr[0].text&&arr[1])arr.shift();
+  // Stop at a recognized explanation header.
+  let ex=arr.findIndex((x,i)=>i>0&&v7LooksExplanation(x.text));if(ex>=0)arr=arr.slice(0,ex);
+  // Locate explicit option markers.
+  let marks=[];for(let i=0;i<arr.length;i++){const m=v7Marker(arr[i].text);if(m)marks.push({i,n:m.n,text:m.text})}
+  // Once 1→4 have occurred, a repeated option number is almost certainly the explanation section.
+  let seen4=false,repeatAt=-1,seen=new Set();
+  for(const m of marks){if(seen4&&seen.has(m.n)){repeatAt=m.i;break}seen.add(m.n);if(m.n===4)seen4=true}
+  if(repeatAt>0){arr=arr.slice(0,repeatAt);marks=marks.filter(m=>m.i<repeatAt)}
+  // Require question sentence at the top. If OCR shuffled the numbered line, recover the closest cue.
+  let cue=arr.findIndex(x=>v6QuestionCue(x.text)&&v4HangulCount(x.text)>=5);if(cue>0)arr=arr.slice(cue);
+  let firstMark=-1;marks=[];for(let i=0;i<arr.length;i++){const m=v7Marker(arr[i].text);if(m){marks.push({i,n:m.n,text:m.text});if(firstMark<0)firstMark=i}}
+  let stemObjs=[],choiceObjs=[[],[],[],[]];
+  // Ideal case: all four markers in order.
+  const pos={};for(const m of marks){if(pos[m.n]==null)pos[m.n]=m.i}
+  if([1,2,3,4].every(n=>pos[n]!=null)&&pos[1]<pos[2]&&pos[2]<pos[3]&&pos[3]<pos[4]){
+    stemObjs=arr.slice(0,pos[1]);
+    for(let n=1;n<=4;n++){const s=pos[n],e=n<4?pos[n+1]:arr.length;choiceObjs[n-1]=arr.slice(s,e)}
+  }else{
+    // Spatial inference: question stem is the cue sentence; explicit markers anchor any choices we did recognize.
+    const cueIdx=Math.max(0,arr.findIndex(x=>v6QuestionCue(x.text)&&v4HangulCount(x.text)>=5));
+    let stemEnd=cueIdx+1;
+    // Include contiguous <보기>/ㄱㄴㄷ material in the stem until an explicit choice appears.
+    const firstExplicit=marks.length?Math.min(...marks.map(m=>m.i)):arr.length;
+    if(firstExplicit>stemEnd&&arr.slice(stemEnd,firstExplicit).some(x=>/<보기>|^[ㄱ-ㅎ][.)]|^[가-힣]\s*[.)]/.test(x.text)))stemEnd=firstExplicit;
+    stemObjs=arr.slice(0,stemEnd);
+    const assigned=new Set();
+    // Fill explicit marker ranges. When marker 2 is missing between 1 and 3, split that spatial range
+    // into option 1 + option 2 instead of letting option 1 swallow both.
+    const ordered=marks.filter((m,i,self)=>self.findIndex(z=>z.n===m.n)===i).sort((a,b)=>a.i-b.i);
+    for(let j=0;j<ordered.length;j++){
+      const m=ordered[j],next=j+1<ordered.length?ordered[j+1]:null,end=next?next.i:arr.length;
+      if(!(m.n>=1&&m.n<=4))continue;
+      const span=next?Math.max(1,next.n-m.n):1;
+      if(next&&span>1){
+        let groups=v7GroupByGaps(arr.slice(m.i,end),span);
+        if(groups.length!==span){const pieces=v7SentencePieces(v7JoinObjs(arr.slice(m.i,end)));if(pieces.length>=span)groups=pieces.slice(0,span).map(t=>[{text:t,bbox:{}}])}
+        for(let z=0;z<span;z++){const n=m.n+z;if(n<=4&&groups[z]){choiceObjs[n-1]=groups[z];assigned.add(n)}}
+      }else{choiceObjs[m.n-1]=arr.slice(m.i,end);assigned.add(m.n)}
+    }
+    // Fill missing choices before the first anchored marker.
+    const firstAnch=ordered.length?ordered[0]:null;
+    if(firstAnch){
+      const missingBefore=[];for(let n=1;n<firstAnch.n;n++)if(!assigned.has(n))missingBefore.push(n);
+      if(missingBefore.length){const pre=arr.slice(stemEnd,firstAnch.i);let groups=v7GroupByGaps(pre,missingBefore.length);
+        if(groups.length!==missingBefore.length){const pieces=v7SentencePieces(v7JoinObjs(pre));if(pieces.length>=missingBefore.length)groups=pieces.slice(-missingBefore.length).map(t=>[{text:t,bbox:{}}])}
+        missingBefore.forEach((n,i)=>choiceObjs[n-1]=groups[i]||[]);
+      }
+    }else{
+      // No marker survived OCR: split everything after the question stem into four visual paragraphs.
+      const rest=arr.slice(stemEnd);let groups=v7GroupByGaps(rest,4);
+      if(groups.length!==4){const pieces=v7SentencePieces(v7JoinObjs(rest));if(pieces.length>=4)groups=pieces.slice(0,4).map(t=>[{text:t,bbox:{}}])}
+      for(let i=0;i<4;i++)choiceObjs[i]=groups[i]||[];
+    }
+    // Fill gaps between anchored markers, e.g. 1 then 3 means infer option 2 from the space between them.
+    for(let n=1;n<=4;n++)if(!choiceObjs[n-1].length){
+      const prev=[...Array(n-1)].map((_,i)=>n-1-i).find(x=>pos[x]!=null);const next=[...Array(4-n)].map((_,i)=>n+1+i).find(x=>pos[x]!=null);
+      if(prev&&next&&next-prev>1){const s=pos[prev]+1,e=pos[next];const groups=v7GroupByGaps(arr.slice(s,e),next-prev-1);const slot=n-prev-1;if(groups[slot])choiceObjs[n-1]=groups[slot]}
+    }
+  }
+  let stem=v7JoinObjs(stemObjs).replace(/^\s*(?:문제\s*)?[0-9]{1,3}\s*/,'').trim();
+  let choices=choiceObjs.map((g,i)=>v7StripChoiceLead(v7JoinObjs(g),i+1));
+  // If a choice accidentally swallowed an explanation repeat, cut at a repeated marker or explanation cue.
+  choices=choices.map((s,i)=>s.replace(/\s+(?:해설|풀이|정답)\b.*$/,'').trim());
+  const goodStem=v4HangulCount(stem)>=5;
+  const goodChoices=choices.filter(x=>v4HangulCount(x)>=3||x.length>=5).length;
+  if(!goodStem||goodChoices<4)return {questionNo:qno,stem,choices,structured:false};
+  return {questionNo:qno,stem,choices,structured:true};
+}
+function v7ParseTextOnly(raw,item){
+  let lines=String(raw||'').replace(/\r/g,'').split('\n').map(v7CleanLine).filter(Boolean).filter(x=>!v4NoiseLine(x));
+  let qno='';for(const l of lines){const m=l.match(/(?:^|\s)([0-9]{3})(?=\s|[^0-9]|$)/);if(m){qno=m[1];break}}
+  let cue=lines.findIndex(x=>v6QuestionCue(x)&&v4HangulCount(x)>=5);if(cue<0)cue=Math.max(0,v4QuestionIndex(lines));
+  // Do not slice at the OCR's question-number line; OCR reading order can put the number after the stem.
+  lines=lines.slice(Math.max(0,cue));
+  let ex=lines.findIndex((x,i)=>i>0&&v7LooksExplanation(x));if(ex>=0)lines=lines.slice(0,ex);
+  // stop if option numbers repeat after option 4 (common when explanation begins with the correct option)
+  let seen=new Set(),saw4=false,cut=-1;for(let i=0;i<lines.length;i++){const m=v7Marker(lines[i]);if(!m)continue;if(saw4&&seen.has(m.n)){cut=i;break}seen.add(m.n);if(m.n===4)saw4=true}if(cut>0)lines=lines.slice(0,cut);
+  // Convert to pseudo-layout with line index as y so the same parser can use sentence/gap inference.
+  const pseudo=lines.map((text,i)=>({text,bbox:{x0:0,y0:i*100,x1:1000,y1:i*100+60}}));
+  const p=v7BuildStructuredFromLines(pseudo,item);if(p&&qno)p.questionNo=qno;return p;
+}
+async function v7Recognize(item,force=false){
+  const ck=`${currentFileSigs[item.source]||'source'+item.source}|${item.pdfPage}|strict-v7`;
+  if(!force){const c=await cacheGet(ck);if(c?.structured&&c?.choices?.length===4){if(c.answer&&!state.answerKeys[keyOf(item)]){state.answerKeys[keyOf(item)]=c.answer;save()}return c}}
+  const page=await getPdfPage(item);v4SetStatus('문제와 보기 위치를 분석하는 중…',3);const full=await v4RenderFull(page,3000);
+  const broad=v4Crop(full,.035,.07,.93,.76,1);
+  let p=null,method='한글 위치분석 OCR';v7LayoutLines=[];
+  try{
+    const prep=v4Prep(broad,false);const lr=await v7OcrLayout(prep,'3');v7LayoutLines=lr.lines;
+    p=v7BuildStructuredFromLines(lr.lines,item);
+    if(!p?.structured)throw new Error('4개 보기 분리 재시도');
+  }catch(e){
+    console.warn('v7 layout retry',e);method='한글 정밀 OCR';v4SetStatus('문제·보기를 정밀하게 다시 읽는 중…',38);
+    // Text-only retry on a broad crop. Crucially, do not discard lines merely because OCR order places 002 later.
+    const raw=await v4Ocr(v4Prep(v4Crop(full,.035,.08,.93,.60,1.25),false),'3');
+    p=v7ParseTextOnly(raw,item);
+  }
+  if(!p)p={questionNo:String(item.printed).padStart(3,'0'),stem:'',choices:['','','',''],structured:false};
+  // Strict mode: never leak raw OCR/explanation into the question card.
+  p.body=[];p.explanation='';p.method=method;p.at=Date.now();
+  let key=Number(state.answerKeys[keyOf(item)]||0)||null;
+  if(!key){try{key=await v7DetectAnswer(full)}catch(e){console.warn('v7 answer scan',e)}}
+  if(key){p.answer=key;state.answerKeys[keyOf(item)]=key;save()}else p.answer=null;
+  await cacheSet(ck,p);return p;
+}
+async function v7AnswerOcr(canvas,whitelist=false){
+  const w=await ensureOcr();
+  const params={tessedit_pageseg_mode:'11',preserve_interword_spaces:'1',user_defined_dpi:'300'};
+  if(whitelist)params.tessedit_char_whitelist='1234①②③④❶❷❸❹⓵⓶⓷⓸';
+  try{await w.setParameters(params)}catch(_){ }
+  const r=await w.recognize(canvas);return cleanText(r?.data?.text||'');
+}
+function v7BlueMaskWide(src){
+  const c=document.createElement('canvas');c.width=src.width;c.height=src.height;const ctx=c.getContext('2d',{willReadFrequently:true,alpha:false});ctx.drawImage(src,0,0);const im=ctx.getImageData(0,0,c.width,c.height),d=im.data;
+  for(let i=0;i<d.length;i+=4){const r=d[i],g=d[i+1],b=d[i+2];const blue=(b>95&&g>85&&b-r>14&&g-r>6)||(b>135&&g>115&&r<155&&b>r*1.08);const v=blue?0:255;d[i]=d[i+1]=d[i+2]=v;d[i+3]=255}ctx.putImageData(im,0,0);return c;
+}
+async function v7DetectAnswer(full){
+  v4SetStatus('정답 번호 확인 중…',84);
+  // The printed answer mark is blue. Masking blue removes the black ①~④ choices, so a circled numeral here is safe.
+  const regions=[[.43,.10,.55,.86],[.52,.22,.46,.72],[.58,.40,.40,.55]];
+  for(const r of regions){
+    try{
+      const m=v7BlueMaskWide(v4Crop(full,...r,1.7));
+      const t=await v7AnswerOcr(m,false);let a=v4StrictAnswer(t)||v4LooseAnswer(t);if(a)return a;
+      const t2=await v7AnswerOcr(m,true);const cs=t2.match(/[①②③④❶❷❸❹⓵⓶⓷⓸]/g)||[];const mp={'①':1,'②':2,'③':3,'④':4,'❶':1,'❷':2,'❸':3,'❹':4,'⓵':1,'⓶':2,'⓷':3,'⓸':4};if(cs.length===1)return mp[cs[0]];
+    }catch(_){ }
+  }
+  return null;
+}
+function v7CleanDisplayText(s){
+  return v7Text(s).replace(/^[-_=~·ㆍ.\s]+/,'').replace(/\s{2,}/g,' ').trim();
+}
+function v7RenderProblem(p){
+  v4Problem=p;const card=document.getElementById('textCard'),loading=document.getElementById('loading');loading.classList.add('hidden');card.classList.remove('hidden');
+  const badge=document.querySelector('.badge');if(badge)badge.textContent='TEXT v7 · CLEAN QUIZ';
+  let content='';
+  if(p.structured&&p.choices?.length===4&&p.choices.every(x=>v7CleanDisplayText(x))){
+    content=`<div class="v7-stem">${v4Esc(v7CleanDisplayText(p.stem))}</div><div class="v4-choices">${p.choices.map((x,i)=>v4OptionHtml(i+1,v7CleanDisplayText(x),true)).join('')}</div>`;
+  }else{
+    content=`<div class="v7-retry"><b>문제와 보기를 깔끔하게 분리하지 못했습니다.</b><div>엉킨 OCR 글자는 표시하지 않았습니다. 「텍스트 다시 추출」을 한 번 누르거나 원문 보기를 사용해 주세요.</div></div>`;
+  }
+  card.innerHTML=`<div class="v4-meta"><span class="v4-qno">문제 ${v4Esc(p.questionNo||'')}</span><span class="v4-method">${v4Esc(p.method||'한글 OCR')} · ${p.answer?'자동채점 준비 ✓':'정답표 확인 중'}</span></div>${content}`;
+  v4SetStatus(p.structured?'문제·보기 정리 완료 · TEXT v7':'보기 분리 재시도 필요',p.structured?100:65,p.structured?'ok':'warn');
+  if(p.structured&&!p.answer&&!state.answerKeys[keyOf(queue[idx])])v7AnswerPromise=v4EnsureAnswer().catch(()=>null);
+}
+
+// Override v6/v5 hooks with strict v7 behavior.
+v4Recognize=v7Recognize;
+v4CacheKey=function(item){return `${currentFileSigs[item.source]||'source'+item.source}|${item.pdfPage}|strict-v7`};
+v4RenderProblem=v7RenderProblem;
+v4EnsureAnswer=async function(){
+  const item=queue[idx];if(!item)return null;let key=Number(state.answerKeys[keyOf(item)]||v4Problem?.answer||0);if(key)return key;
+  if(v7AnswerPromise)return v7AnswerPromise;
+  v7AnswerPromise=(async()=>{try{let full=v4FullCanvas;if(!full){const page=await getPdfPage(item);full=await v4RenderFull(page,3000)}key=await v7DetectAnswer(full);if(key){state.answerKeys[keyOf(item)]=key;if(v4Problem){v4Problem.answer=key;await cacheSet(v4CacheKey(item),v4Problem)}save();const m=document.querySelector('.v4-method');if(m)m.textContent=(v4Problem?.method||'한글 OCR')+' · 자동채점 준비 ✓';return key}return null}finally{v7AnswerPromise=null}})();return v7AnswerPromise;
+};
+reloadCurrentText=async function(force=false){const item=queue[idx];if(item){v7AnswerPromise=null;v7LayoutLines=[];await renderTextPage(item,revealed,!!force)}};
+
+try{
+  document.title='교정학·형사정책 MOCA TEXT v7';
+  document.querySelector('.brand p').textContent='MOCA TEXT v7 · 문제 + 4개 보기 전용 화면 · 선택 즉시 채점';
+  const b=document.querySelector('.badge');if(b)b.textContent='TEXT v7 · CLEAN QUIZ';
+  const note=document.querySelector('.footnote');if(note)note.textContent='※ 책 페이지 전체를 보여주지 않고 문제와 4개 보기만 분리해 표시합니다. PDF와 추출 데이터는 이 기기에서만 처리됩니다.';
+}catch(_){ }
+
+</script>
+
+
+<script id="moca-v8-script">
+// ===== MOCA TEXT v8: multi-pass clean quiz + strict validation =====
+let v8AnswerPromise=null;
+function v8Esc(s){return v4Esc(String(s??''))}
+function v8WrongLead(s,expected){
+  s=v7Text(s); const m=s.match(/^\s*(?:[①②③④❶❷❸❹⓵⓶⓷⓸]|\(?[1-4]\)?[.)\-:])\s*/);
+  if(!m)return false;
+  const mm=v7Marker(s); return !!(mm&&mm.n!==expected);
+}
+function v8GarbageScore(s){
+  s=String(s||''); if(!s)return 999;
+  const ko=(s.match(/[가-힣]/g)||[]).length, al=(s.match(/[A-Za-z]/g)||[]).length, sym=(s.match(/[^가-힣A-Za-z0-9\s.,?!()<>·ㆍ「」『』“”'"%\-:;]/g)||[]).length;
+  return (al>Math.max(10,ko*.28)?2:0)+(sym>Math.max(8,s.length*.12)?2:0)+(ko<4?2:0);
+}
+function v8CutRepeat(s){
+  s=v7Text(s);
+  const ex=s.search(/\s+(?:해설|풀이|정답|포인트|출제포인트)\b/); if(ex>0)s=s.slice(0,ex);
+  // Explanation often starts by repeating a numbered option after option 4.
+  const rep=s.search(/\s+[①②③④❶❷❸❹⓵⓶⓷⓸]\s+/); if(rep>15)s=s.slice(0,rep);
+  return v7CleanDisplayText(s);
+}
+function v8RepairParsed(p,item){
+  if(!p)return null;
+  const src=(p.choices||[]).map(x=>v8CutRepeat(x));
+  const buckets=[[],[],[],[]], loose=[];
+  for(let i=0;i<src.length;i++){
+    let t=src[i]; if(!t)continue;
+    const m=v7Marker(t);
+    if(m&&m.n>=1&&m.n<=4){buckets[m.n-1].push(m.text); continue}
+    // Sometimes old parser placed an explicit marker in a wrong slot but StripChoiceLead left it.
+    const rm=t.match(/^\s*([1-4])\s*[.)]\s*(.*)$/); if(rm){buckets[Number(rm[1])-1].push(rm[2]);continue}
+    loose.push({slot:i,text:t});
+  }
+  // Attach loose continuation fragments to nearest preceding explicit bucket.
+  for(const x of loose){
+    let target=-1;
+    for(let j=Math.min(3,x.slot);j>=0;j--)if(buckets[j].length){target=j;break}
+    if(target>=0)buckets[target].push(x.text);
+  }
+  let choices=buckets.map((a,i)=>v8CutRepeat(a.join(' ')));
+  // If repair lost information, keep original slot only when it does not start with a conflicting marker.
+  for(let i=0;i<4;i++)if(!choices[i]&&src[i]&&!v8WrongLead(src[i],i+1))choices[i]=v8CutRepeat(v7StripChoiceLead(src[i],i+1));
+  const q={...p,questionNo:p.questionNo||String(item.printed).padStart(3,'0'),stem:v7CleanDisplayText(p.stem||''),choices};
+  q.structured=v8Validate(q).ok; return q;
+}
+function v8Validate(p){
+  const reasons=[]; if(!p)return{ok:false,reasons:['no problem']};
+  const stem=v7CleanDisplayText(p.stem||''); const choices=(p.choices||[]).map(v7CleanDisplayText);
+  if(v4HangulCount(stem)<6)reasons.push('stem');
+  if(!v6QuestionCue(stem)&&!/[?？]$/.test(stem))reasons.push('question cue');
+  if(choices.length!==4)reasons.push('choice count');
+  for(let i=0;i<4;i++){
+    const c=choices[i]||''; if(v4HangulCount(c)<3&&c.length<8)reasons.push('short '+(i+1));
+    if(v8WrongLead(c,i+1))reasons.push('wrong marker '+(i+1));
+    if(v8GarbageScore(c)>=4)reasons.push('garbage '+(i+1));
+  }
+  // Choices should not be near duplicates or obvious explanation continuations.
+  const norm=choices.map(x=>x.replace(/\s/g,'').slice(0,30));
+  if(new Set(norm.filter(Boolean)).size<4)reasons.push('duplicate');
+  return{ok:reasons.length===0,reasons};
+}
+function v8CandidateScore(p){
+  if(!p)return-999; const v=v8Validate(p); let s=v.ok?100:0;
+  s+=Math.min(40,v4HangulCount(p.stem||'')/3);
+  for(let i=0;i<4;i++){const c=p.choices?.[i]||'';s+=Math.min(22,v4HangulCount(c)/3);if(v8WrongLead(c,i+1))s-=35;if(v8GarbageScore(c)>=4)s-=25}
+  s-=v.reasons.length*15; return s;
+}
+async function v8ParseCandidateText(raw,item){
+  let p=v7ParseTextOnly(raw,item); if(p)p=v8RepairParsed(p,item); return p;
+}
+async function v8Recognize(item,force=false){
+  const ck=`${currentFileSigs[item.source]||'source'+item.source}|${item.pdfPage}|strict-v8`;
+  if(!force){const c=await cacheGet(ck);if(c&&v8Validate(c).ok){if(c.answer&&!state.answerKeys[keyOf(item)]){state.answerKeys[keyOf(item)]=c.answer;save()}return c}}
+  const page=await getPdfPage(item);v4SetStatus('문제와 4개 보기를 정밀 분석하는 중…',3);const full=await v4RenderFull(page,3200);v4FullCanvas=full;
+  const broad=v4Crop(full,.025,.055,.95,.74,1.15); const candidates=[];
+  // Pass 1: coordinate-aware layout OCR.
+  try{const lr=await v7OcrLayout(v4Prep(broad,false),'3');v7LayoutLines=lr.lines;let p=v7BuildStructuredFromLines(lr.lines,item);if(p)candidates.push(v8RepairParsed(p,item))}catch(e){console.warn('v8 layout',e)}
+  // Pass 2/3: different segmentation modes. Missing option numbers are often recovered by one of these.
+  for(const [psm,label] of [['6','문단 OCR'],['11','희소 텍스트 OCR']]){
+    try{v4SetStatus(`${label}로 보기 누락을 재확인 중…`,psm==='6'?32:55);const raw=await v4Ocr(v4Prep(broad,psm==='6'),psm);let p=await v8ParseCandidateText(raw,item);if(p)candidates.push(p)}catch(e){console.warn('v8 '+label,e)}
+  }
+  // Pass 4: slightly tighter vertical crop to exclude explanation/footer contamination.
+  try{v4SetStatus('문제 영역만 다시 확인 중…',68);const tight=v4Crop(full,.045,.10,.91,.53,1.35);const raw=await v4Ocr(v4Prep(tight,false),'6');let p=await v8ParseCandidateText(raw,item);if(p)candidates.push(p)}catch(e){console.warn('v8 tight',e)}
+  let p=candidates.sort((a,b)=>v8CandidateScore(b)-v8CandidateScore(a))[0]||null;
+  if(!p)p={questionNo:String(item.printed).padStart(3,'0'),stem:'',choices:['','','',''],structured:false};
+  p=v8RepairParsed(p,item)||p; p.body=[];p.explanation='';p.method='한글 다중검증 OCR';p.at=Date.now();
+  const val=v8Validate(p);p.structured=val.ok;p.validation=val.reasons;
+  let key=Number(state.answerKeys[keyOf(item)]||0)||null;
+  if(!key){try{key=await v7DetectAnswer(full)}catch(e){console.warn('v8 answer',e)}}
+  if(key){p.answer=key;state.answerKeys[keyOf(item)]=key;save()}else p.answer=null;
+  await cacheSet(ck,p);return p;
+}
+function v8OptionHtml(n,text){return `<button class="v8-choice" data-n="${n}" onclick="chooseAnswer(${n})"><span class="v8-num">${circled(n)}</span><span class="v8-choice-text">${v8Esc(text)}</span></button>`}
+function v8RenderProblem(p){
+  v4Problem=p;const card=document.getElementById('textCard'),loading=document.getElementById('loading');loading.classList.add('hidden');card.classList.remove('hidden');
+  const badge=document.querySelector('.badge');if(badge)badge.textContent='TEXT v8 · VERIFIED QUIZ';
+  const val=v8Validate(p);let content='';
+  if(val.ok){content=`<div class="v8-stem">${v8Esc(v7CleanDisplayText(p.stem))}</div><div class="v8-choices">${p.choices.map((x,i)=>v8OptionHtml(i+1,v7CleanDisplayText(x))).join('')}</div>`}
+  else{content=`<div class="v7-retry"><b>깔끔한 문제 형식으로 확인되지 않아 표시를 중단했습니다.</b><div>엉킨 OCR 문장은 보여주지 않습니다. 「텍스트 다시 추출」을 누르면 다른 인식 방식으로 재시도합니다.</div></div>`}
+  card.innerHTML=`<div class="v8-meta"><span class="v8-qno">문제 ${v8Esc(p.questionNo||'')}</span><span class="v8-method">${p.answer?'자동채점 준비 ✓':'정답 확인 대기'}</span></div>${content}`;
+  v4SetStatus(val.ok?'문제·보기 검증 완료 · TEXT v8':'문제 분리 재시도 필요',val.ok?100:65,val.ok?'ok':'warn');
+  if(val.ok&&!p.answer&&!state.answerKeys[keyOf(queue[idx])])v8AnswerPromise=v4EnsureAnswer().catch(()=>null);
+}
+function v8AllButtons(){return document.querySelectorAll('.v8-choice')}
+function v8MarkOptions(key,sel){v8AllButtons().forEach(b=>{const n=Number(b.dataset.n);b.disabled=true;b.classList.remove('selected','correct','wrong');if(n===key)b.classList.add('correct');if(n===sel&&sel!==key)b.classList.add('wrong');else if(n===sel)b.classList.add('selected')})}
+// Override rendering/recognition/grade hooks.
+v4Recognize=v8Recognize;
+v4CacheKey=function(item){return `${currentFileSigs[item.source]||'source'+item.source}|${item.pdfPage}|strict-v8`};
+v4RenderProblem=v8RenderProblem;
+v4AllAnswerButtons=v8AllButtons;
+v4MarkOptions=v8MarkOptions;
+v4EnsureAnswer=async function(){
+  const item=queue[idx];if(!item)return null;let key=Number(state.answerKeys[keyOf(item)]||v4Problem?.answer||0);if(key)return key;
+  if(v8AnswerPromise)return v8AnswerPromise;
+  v8AnswerPromise=(async()=>{try{let full=v4FullCanvas;if(!full){const page=await getPdfPage(item);full=await v4RenderFull(page,3200)}key=await v7DetectAnswer(full);if(key){state.answerKeys[keyOf(item)]=key;if(v4Problem){v4Problem.answer=key;await cacheSet(v4CacheKey(item),v4Problem)}save();const m=document.querySelector('.v8-method');if(m)m.textContent='자동채점 준비 ✓';return key}return null}finally{v8AnswerPromise=null}})();return v8AnswerPromise;
+};
+recordAndShow=function(correct,key,self){
+  const item=queue[idx];if(session.some(x=>x._idx===idx))return;session.push({...item,_idx:idx,selected:currentSelected,key:key||null,correct,unknown:self&&!key});markStudied(item,correct);if(!correct)addReviewKey(keyOf(item));
+  document.getElementById('feedback').innerHTML=`<div class="resultbox ${correct?'correct':'wrong'}"><div class="verdict">${correct?'정답입니다 ✓':'오답입니다'}</div><div>정답 <b>${circled(key)}</b> · 내 답 <b>${circled(currentSelected)}</b></div></div>`;v8MarkOptions(key,currentSelected);document.getElementById('nextBtn').classList.remove('hidden');document.getElementById('revealBtn').classList.add('hidden');save();renderSetupInfo();
+};
+chooseAnswer=async function(n){
+  if(session.some(x=>x._idx===idx))return;currentSelected=n;v8AllButtons().forEach(b=>b.classList.toggle('selected',Number(b.dataset.n)===n));let key=Number(state.answerKeys[keyOf(queue[idx])]||v4Problem?.answer||0);
+  if(!key){document.getElementById('feedback').innerHTML=`<div class="resultbox"><b>${circled(n)} 선택 · 정답 확인 중…</b></div>`;try{key=await v4EnsureAnswer()}catch(e){console.warn(e)}}
+  if(key){revealed=true;recordAndShow(n===key,key,false)}else{document.getElementById('feedback').innerHTML=`<div class="resultbox"><b>${circled(n)} 선택</b><div style="margin-top:6px;color:var(--muted)">정답표 자동인식이 되지 않았습니다. 원문에서 정답 번호를 한 번만 등록하면 이후 자동채점됩니다.</div></div>`;const w=document.getElementById('originalWrap');if(w?.classList.contains('hidden'))toggleOriginal();showKeyTrainer()}
+};
+reloadCurrentText=async function(force=false){const item=queue[idx];if(item){v8AnswerPromise=null;await renderTextPage(item,revealed,!!force)}};
+try{
+  document.title='교정학·형사정책 MOCA TEXT v8';document.querySelector('.brand p').textContent='MOCA TEXT v8 · 문제 + 4개 보기 검증 · 선택 즉시 채점';const b=document.querySelector('.badge');if(b)b.textContent='TEXT v8 · VERIFIED QUIZ';
+}catch(_){ }
+</script>
+<style id="moca-v8-style">
+.v8-meta{display:flex;justify-content:space-between;gap:12px;align-items:center;margin:0 0 16px}.v8-qno{display:inline-flex;padding:7px 11px;border-radius:999px;background:#eef3ff;color:#3153d6;font-size:13px;font-weight:950}.v8-method{font-size:12px;color:#6f7b90}.v8-stem{font-size:22px;line-height:1.55;font-weight:900;letter-spacing:-.45px;margin:4px 0 18px;color:#111827}.v8-choices{display:grid;gap:10px}.v8-choice{width:100%;display:grid;grid-template-columns:42px 1fr;align-items:start;gap:10px;text-align:left;border:1px solid #dfe6f0;border-radius:14px;background:#fff;padding:15px 16px;color:#1b2433;line-height:1.58;font-size:17px;transition:.12s}.v8-choice:hover{border-color:#91a9ff;background:#f8faff}.v8-num{font-size:20px;font-weight:900;color:#52627a;line-height:1.35}.v8-choice.selected{border-color:#5276f4;background:#edf2ff}.v8-choice.correct{border-color:#24a56a;background:#ecfbf3;color:#10643f}.v8-choice.correct .v8-num{color:#148053}.v8-choice.wrong{border-color:#dc5967;background:#fff1f3;color:#9f2735}.v8-choice.wrong .v8-num{color:#bf3546}.v8-choice:disabled{opacity:1;cursor:default}.v8-choice-text{white-space:normal;word-break:keep-all}.resultbox.correct{border:1px solid #b9ead2;background:#edf9f3}.resultbox.wrong{border:1px solid #f0c0c6;background:#fff2f4}@media(max-width:580px){.v8-stem{font-size:19px}.v8-choice{font-size:16px;grid-template-columns:34px 1fr;padding:13px 12px}.v8-num{font-size:18px}.v8-meta{align-items:flex-start;flex-direction:column;gap:6px}}
+</style>
 </body>
 </html>

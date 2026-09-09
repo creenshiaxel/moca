@@ -25,10 +25,36 @@
 @media(max-width:820px){.theme-grid{grid-template-columns:repeat(3,1fr)}.progress-list{grid-template-columns:repeat(3,1fr)}.file-grid{grid-template-columns:1fr}.list-tools{grid-template-columns:1fr 1fr}.list-tools .wide{grid-column:1/-1}}
 @media(max-width:580px){.text-card{padding:18px 16px;font-size:17px;line-height:1.75}.shell{padding:18px 10px 50px}.header{align-items:flex-start;flex-direction:column}.theme-grid{grid-template-columns:repeat(2,1fr)}.stats{grid-template-columns:repeat(2,1fr)}.grid2{grid-template-columns:1fr}.progress-list{grid-template-columns:repeat(2,1fr)}.choice-row{gap:6px}.choice{padding:10px 4px}.panel{padding:17px}.brand h1{font-size:25px}}
 </style>
+
+<style id="moca-v3-style">
+/* v3: clean structured question UI */
+.crop-control{display:none!important}
+#answerChoices{display:none!important}
+.text-card{white-space:normal!important;padding:22px 24px!important;font-size:16px!important;line-height:1.6!important}
+.v3-storage-note{margin:10px 0 14px;padding:11px 13px;border-radius:12px;background:#f8fafc;color:#596477;font-size:12px;line-height:1.55;border:1px solid var(--line)}
+.v3-storage-note.ok{background:var(--greenSoft);color:#24674d;border-color:#c9ead7}
+.v3-qmeta{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:12px}
+.v3-qnum{display:inline-flex;align-items:center;justify-content:center;min-width:54px;padding:7px 10px;border-radius:10px;background:var(--blueSoft);color:var(--blue);font-weight:950;font-size:14px}
+.v3-method{font-size:11px;color:var(--muted);font-weight:800}
+.v3-stem{font-size:20px;line-height:1.65;font-weight:850;letter-spacing:-.3px;margin:5px 0 18px;word-break:keep-all;white-space:pre-wrap}
+.v3-options{display:grid;gap:9px}
+.v3-option{width:100%;border:1px solid var(--line);background:#fff;border-radius:13px;padding:13px 15px;text-align:left;display:grid;grid-template-columns:34px 1fr;gap:8px;align-items:start;font-size:16px;line-height:1.55;color:var(--text)}
+.v3-option:hover{border-color:#aebeff;background:#fbfcff}
+.v3-option .n{font-size:19px;font-weight:950;color:#5a6680;line-height:1.35}
+.v3-option.selected{background:var(--blueSoft);border-color:#aebeff}
+.v3-option.correct{background:var(--greenSoft);border-color:#b6e0c8}
+.v3-option.wrong{background:var(--redSoft);border-color:#edbcc5}
+.v3-option:disabled{cursor:default;opacity:1}
+.v3-warning{margin-top:12px;padding:10px 12px;border-radius:11px;background:#fff8e8;color:#825e16;font-size:12px;line-height:1.55}
+.v3-explanation{margin-top:18px;padding:17px 18px;border-radius:14px;background:#f8fafc;border:1px solid var(--line)}
+.v3-explanation h3{margin:0 0 9px;font-size:15px}.v3-explanation div{white-space:pre-wrap;word-break:keep-all;font-size:15px;line-height:1.7;color:#3e485a}
+.v3-keyrow{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:9px}.v3-keybtn{border:1px solid var(--line);border-radius:10px;background:#fff;padding:10px;font-size:18px;font-weight:950}
+@media(max-width:580px){.text-card{padding:18px 15px!important}.v3-stem{font-size:18px}.v3-option{padding:12px 11px;grid-template-columns:30px 1fr;font-size:15px}}
+</style>
 </head>
 <body>
 <div class="shell">
-<header class="header"><div class="brand"><h1>교정학 · 형사정책 MOCA</h1><p>MOCA v13 방식 · 41 THEME · 텍스트 문제 · 순서/랜덤 · 필수복습 · 오답 재시험</p></div><div class="badge">TEXT STUDY v2</div></header>
+<header class="header"><div class="brand"><h1>교정학 · 형사정책 MOCA</h1><p>MOCA v13 방식 · 41 THEME · 문제·보기 정리 · 선택 즉시 채점 · 순서/랜덤 · 필수복습</p></div><div class="badge">TEXT STUDY v3</div></header>
 <nav class="tabs">
 <button class="tab active" id="tab-study" onclick="showTab('study')">시험</button>
 <button class="tab" id="tab-book" onclick="showTab('book')">문제장</button>
@@ -165,6 +191,177 @@ if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('./sw.js').catch(err => console.warn('Service worker registration failed', err));
   });
 }
+</script>
+
+<script id="moca-v3-script">
+// ===== MOCA TEXT v3 override =====
+let v3Problem=null, v3FullCanvas=null, v3PdfDbPromise=null, v3RestorePromise=null;
+
+function v3OpenPdfDb(){
+  if(v3PdfDbPromise) return v3PdfDbPromise;
+  v3PdfDbPromise=new Promise((resolve,reject)=>{
+    const r=indexedDB.open('moca_pdf_private_v1',1);
+    r.onupgradeneeded=()=>{const db=r.result;if(!db.objectStoreNames.contains('pdfs'))db.createObjectStore('pdfs')};
+    r.onsuccess=()=>resolve(r.result); r.onerror=()=>reject(r.error);
+  });
+  return v3PdfDbPromise;
+}
+async function v3PdfGet(k){try{const db=await v3OpenPdfDb();return await new Promise((res,rej)=>{const r=db.transaction('pdfs','readonly').objectStore('pdfs').get(String(k));r.onsuccess=()=>res(r.result||null);r.onerror=()=>rej(r.error)})}catch(e){return null}}
+async function v3PdfPut(k,v){const db=await v3OpenPdfDb();return await new Promise((res,rej)=>{const tx=db.transaction('pdfs','readwrite');tx.objectStore('pdfs').put(v,String(k));tx.oncomplete=()=>res();tx.onerror=()=>rej(tx.error)})}
+async function v3PdfClear(){const db=await v3OpenPdfDb();return await new Promise((res,rej)=>{const tx=db.transaction('pdfs','readwrite'),r=tx.objectStore('pdfs').clear();r.onsuccess=()=>res();r.onerror=()=>rej(r.error)})}
+function v3FileSig(f){return `${f.name||'pdf'}|${f.size||0}|${f.lastModified||0}`}
+function v3StorageNote(){
+  let el=document.getElementById('v3StorageNote'); if(!el)return;
+  const n=[1,2].filter(x=>pdfFiles[x]).length;
+  el.classList.toggle('ok',n===2);
+  el.textContent=n===2?'✓ 교재 2개가 이 기기에 저장되어 있습니다. 다음 접속부터 자동으로 불러옵니다.':n===1?'교재 1개 저장됨 · 나머지 PDF도 한 번 선택해 주세요.':'처음 한 번만 PDF 2개를 선택해 주세요. 선택한 PDF는 이 브라우저 안에만 저장됩니다.';
+}
+async function v3SavePdf(which,f){
+  const st=document.getElementById(`pdf${which}status`),base=`${f.name} · ${(f.size/1024/1024).toFixed(1)} MB`;
+  try{
+    st.textContent=base+' · 이 기기에 저장 중…';
+    try{if(navigator.storage?.persist)await navigator.storage.persist()}catch(_){ }
+    await v3PdfPut(which,{blob:f,name:f.name,size:f.size,lastModified:f.lastModified,sig:v3FileSig(f),savedAt:Date.now()});
+    st.textContent=base+' · 기기 저장 완료';st.className='file-status ok';v3StorageNote();
+  }catch(e){console.warn('local pdf save failed',e);st.textContent=base+' · 현재 접속에서는 사용 가능 · 기기 저장 실패';st.className='file-status warn';v3StorageNote()}
+}
+connectPdf=async function(input,which){
+  const f=input.files?.[0]; if(!f)return;
+  pdfFiles[which]=f; currentFileSigs[which]=v3FileSig(f); pdfDocs[which]=null;
+  const st=document.getElementById(`pdf${which}status`);st.textContent=`${f.name} · ${(f.size/1024/1024).toFixed(1)} MB`;st.className='file-status ok';
+  v3SavePdf(which,f);
+};
+async function v3RestorePdfs(){
+  for(const which of [1,2]){
+    const v=await v3PdfGet(which),st=document.getElementById(`pdf${which}status`);
+    if(v?.blob){pdfFiles[which]=v.blob;currentFileSigs[which]=v.sig||`${v.name}|${v.size}|${v.lastModified||0}`;pdfDocs[which]=null;st.textContent=`${v.name||'저장된 PDF'} · ${(Number(v.size||v.blob.size)/1024/1024).toFixed(1)} MB · 저장본 자동 불러옴`;st.className='file-status ok'}
+    else {st.textContent='저장된 교재 없음 · 처음 한 번 PDF 선택';st.className='file-status'}
+  }
+  v3StorageNote();
+}
+async function v3RemoveSavedPdfs(){
+  if(!confirm('이 브라우저에 저장된 교재 PDF 2개를 삭제할까요? 학습기록은 유지됩니다.'))return;
+  await v3PdfClear(); pdfFiles={1:null,2:null};pdfDocs={1:null,2:null};currentFileSigs={1:'',2:''};
+  for(const w of [1,2]){const st=document.getElementById(`pdf${w}status`);st.textContent='저장된 교재 없음 · PDF 선택 필요';st.className='file-status'}
+  v3StorageNote(); alert('기기에 저장된 PDF를 삭제했습니다.');
+}
+async function v3EnsureSources(q){
+  if(v3RestorePromise)await v3RestorePromise;
+  const need=[...new Set(q.map(x=>x.source))],miss=need.filter(n=>!pdfFiles[n]);
+  if(miss.length){alert(`${miss.map(n=>n===1?'교정학개론.pdf':'교정학개론 - 형사정책.pdf').join(', ')} 파일을 처음 한 번 선택해 주세요.`);return false}
+  return true;
+}
+startTest=async function(){const q=buildQueueFromThemes();if(!q.length)return alert('THEME를 선택해 주세요.');if(!await v3EnsureSources(q))return;testMode='normal';begin(q)};
+startReviewTest=async function(){const ex=arrSet(state.excluded);let q=(state.review||[]).map(Number).filter(p=>!ex.has(String(p))).map(p=>{const th=themeForPage(p);return{printed:p,source:p<=398?1:2,pdfPage:sourcePage(p),themeId:th.id,part:th.part,t:th.t}});q=shuffle(q);if(!q.length)return alert('필수복습 문제가 없습니다.');if(!await v3EnsureSources(q))return;testMode='review';begin(q)};
+singlePage=async function(p){const th=themeForPage(p),q=[{printed:p,source:p<=398?1:2,pdfPage:sourcePage(p),themeId:th.id,part:th.part,t:th.t}];if(!await v3EnsureSources(q))return;showTab('study');document.getElementById('setup').classList.add('hidden');testMode='single';begin(q)};
+
+function v3SetStatus(msg,pct=null,kind=''){
+  const st=document.getElementById('textStatus'),bar=document.getElementById('ocrBar');
+  st.textContent=msg;st.className='text-status'+(kind?` ${kind}`:'');bar.style.width=pct===null?'0%':`${Math.max(0,Math.min(100,pct))}%`;
+}
+async function v3RenderFull(page,targetWidth=2200){
+  const base=page.getViewport({scale:1}),vp=page.getViewport({scale:targetWidth/base.width});
+  const c=document.createElement('canvas');c.width=Math.floor(vp.width);c.height=Math.floor(vp.height);
+  const ctx=c.getContext('2d',{alpha:false});ctx.fillStyle='#fff';ctx.fillRect(0,0,c.width,c.height);await page.render({canvasContext:ctx,viewport:vp}).promise;
+  v3FullCanvas=c;currentRenderedPage=page;
+  const show=document.getElementById('pdfCanvas');show.width=c.width;show.height=c.height;show.getContext('2d').drawImage(c,0,0);
+  return c;
+}
+function v3Crop(src,xr,yr,wr,hr,scale=1){
+  const sx=Math.max(0,Math.floor(src.width*xr)),sy=Math.max(0,Math.floor(src.height*yr)),sw=Math.max(1,Math.floor(src.width*wr)),sh=Math.max(1,Math.floor(src.height*hr));
+  const c=document.createElement('canvas');c.width=Math.floor(sw*scale);c.height=Math.floor(sh*scale);const ctx=c.getContext('2d',{alpha:false});ctx.fillStyle='#fff';ctx.fillRect(0,0,c.width,c.height);ctx.drawImage(src,sx,sy,sw,sh,0,0,c.width,c.height);return c;
+}
+function v3Prep(src){
+  const c=document.createElement('canvas');c.width=src.width;c.height=src.height;const ctx=c.getContext('2d',{willReadFrequently:true,alpha:false});ctx.drawImage(src,0,0);
+  const im=ctx.getImageData(0,0,c.width,c.height),d=im.data;
+  for(let i=0;i<d.length;i+=4){const g=.299*d[i]+.587*d[i+1]+.114*d[i+2];let v=g>242?255:Math.max(0,Math.min(255,(g-128)*1.55+128));d[i]=d[i+1]=d[i+2]=v;d[i+3]=255}
+  ctx.putImageData(im,0,0);return c;
+}
+async function v3Ocr(canvas,psm='6'){
+  const w=await ensureOcr();try{await w.setParameters({tessedit_pageseg_mode:String(psm),preserve_interword_spaces:'1'})}catch(_){ }
+  const r=await w.recognize(canvas);return cleanText(r?.data?.text||'');
+}
+function v3Lines(raw){return String(raw||'').replace(/\r/g,'').split('\n').map(x=>x.replace(/[|｜]/g,' ').replace(/[ \t]+/g,' ').trim())}
+function v3Noise(s){return !s||/^(THEME|PART)\b/i.test(s)||/기출사용설명서/.test(s)||/^교정학[ ·ㆍ]/.test(s)||/^\d{1,3}\s*$/.test(s)||/^[^가-힣A-Za-z0-9]{4,}$/.test(s)}
+function v3Marker(line,expected){
+  const s=line.trim(),map={'①':1,'②':2,'③':3,'④':4,'❶':1,'❷':2,'❸':3,'❹':4,'⓵':1,'⓶':2,'⓷':3,'⓸':4};
+  if(map[s[0]])return{n:map[s[0]],text:s.slice(1).trim()};
+  let m=s.match(/^\(?\s*([1-4])\s*\)?[.)]?\s+(.+)/);if(m)return{n:Number(m[1]),text:m[2].trim()};
+  m=s.match(/^([@©®ⓒⓓ○◎◉◇◆□■<>〈〉\[\]{}~_=+*-])\s*(.+)/);if(m&&expected>=1&&expected<=4&&(m[2].match(/[가-힣]/g)||[]).length>=2)return{n:expected,text:m[2].trim()};
+  return null;
+}
+function v3Answer(t){
+  const c=String(t||'').replace(/\s/g,''),map={'①':1,'②':2,'③':3,'④':4,'❶':1,'❷':2,'❸':3,'❹':4,'⓵':1,'⓶':2,'⓷':3,'⓸':4};
+  let m=c.match(/정답[:：]?([①②③④❶❷❸❹⓵⓶⓷⓸1-4])/);if(m)return map[m[1]]||Number(m[1]);
+  m=c.match(/답[:：]?([①②③④❶❷❸❹⓵⓶⓷⓸1-4])/);if(m)return map[m[1]]||Number(m[1]);return null;
+}
+function v3Tidy(s){return String(s||'').replace(/^[-~|]+\s*/,'').replace(/\s+([,.?!])/g,'$1').replace(/[ ]{2,}/g,' ').trim()}
+function v3Parse(raw,item){
+  const lines=v3Lines(raw).filter(x=>!v3Noise(x));let answer=v3Answer(raw);
+  let qIdx=lines.findIndex(x=>/\b\d{3}\b/.test(x)&&(x.match(/[가-힣]/g)||[]).length>=3);if(qIdx<0)qIdx=lines.findIndex(x=>(x.match(/[가-힣]/g)||[]).length>=6);
+  let qno='',first=qIdx>=0?lines[qIdx]:'';let qm=first.match(/\b(\d{3})\b/);if(qm){qno=qm[1];first=first.replace(qm[0],' ').trim()}
+  const expIdx=lines.findIndex((x,i)=>i>qIdx&&/(?:^|\s)(해설|풀이)(?:\s|$)/.test(x));const ansIdx=lines.findIndex((x,i)=>i>qIdx&&/정답/.test(x));const end=expIdx>=0?expIdx:(ansIdx>=0?ansIdx:lines.length);
+  let body=(qIdx>=0?[first,...lines.slice(qIdx+1,end)]:lines.slice(0,end)).filter(Boolean).map(x=>x.replace(/(?:19|20)?\d{2,4}\.?\s*[^가-힣]{0,8}(?:공채|경채|공개|채용|시험).*$/,'').trim()).filter(Boolean);
+  let stem=[],choices=[null,null,null,null],cur=0,started=false;
+  for(const line of body){const mi=v3Marker(line,started?Math.min(cur+1,4):1);if(mi&&mi.n>=1&&mi.n<=4){started=true;cur=mi.n;choices[cur-1]=v3Tidy(mi.text);continue}if(!started)stem.push(line);else if(cur)choices[cur-1]=v3Tidy((choices[cur-1]||'')+' '+line)}
+  let explanation='';if(expIdx>=0){let ex=lines.slice(expIdx+1).filter(x=>!v3Noise(x)&&!/정답/.test(x));explanation=cleanText(ex.join('\n'))}
+  return{questionNo:qno||String(item.printed).padStart(3,'0'),stem:v3Tidy(stem.join(' '))||v3Tidy(body[0]||''),choices:choices.map(x=>v3Tidy(x||'')),explanation,answer,raw:cleanText(raw)};
+}
+async function v3DetectAnswer(full,raw){
+  let a=v3Answer(raw);if(a)return a;v3SetStatus('정답 번호 자동 확인 중…',91);
+  for(const r of [[.58,.76,.39,.18],[.62,.82,.34,.13],[.50,.70,.47,.25]]){const t=await v3Ocr(v3Prep(v3Crop(full,...r,2.2)),'6');a=v3Answer(t);if(a)return a}
+  return null;
+}
+function v3CacheKey(item){return `${currentFileSigs[item.source]||'source'+item.source}|${item.pdfPage}|structured-v3`}
+async function v3Recognize(item,force=false){
+  const ck=v3CacheKey(item);if(!force){const c=await cacheGet(ck);if(c?.stem){if(c.answer&&!state.answerKeys[keyOf(item)]){state.answerKeys[keyOf(item)]=c.answer;save()}return c}}
+  const page=await getPdfPage(item);v3SetStatus('문제 페이지 준비 중…',2);const full=await v3RenderFull(page,2200);
+  let raw=await extractPdfText(page,1),method='PDF 텍스트';
+  if(textQuality(raw)<.45){v3SetStatus('한글 OCR로 문제를 읽는 중…',5);raw=await v3Ocr(v3Prep(v3Crop(full,.035,.045,.93,.90,1)),'6');method='고화질 OCR'}
+  let p=v3Parse(raw,item);
+  if(p.choices.filter(Boolean).length<3){v3SetStatus('보기 영역을 한 번 더 정리하는 중…',76);const t2=await v3Ocr(v3Prep(v3Crop(full,.04,.10,.92,.66,1.25)),'6'),p2=v3Parse(t2,item);if(p2.choices.filter(Boolean).length>p.choices.filter(Boolean).length){p=p2;p.raw=raw+'\n'+t2}}
+  p.answer=p.answer||await v3DetectAnswer(full,raw);p.method=method;p.at=Date.now();if(p.answer){state.answerKeys[keyOf(item)]=p.answer;save()}await cacheSet(ck,p);return p;
+}
+function v3Esc(s){return String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
+function v3RenderProblem(p){
+  v3Problem=p;const card=document.getElementById('textCard'),loading=document.getElementById('loading');loading.classList.add('hidden');card.classList.remove('hidden');
+  const cnt=p.choices.filter(Boolean).length,opts=p.choices.map((t,i)=>`<button class="v3-option" data-n="${i+1}" onclick="chooseAnswer(${i+1})"><span class="n">${circled(i+1)}</span><span>${t?v3Esc(t):'<span style="color:var(--muted)">보기 텍스트 인식 안 됨 · 원문 확인</span>'}</span></button>`).join('');
+  card.innerHTML=`<div class="v3-qmeta"><span class="v3-qnum">#${v3Esc(p.questionNo)}</span><span class="v3-method">${v3Esc(p.method||'인식 완료')}${p.answer?' · 정답 자동확인 ✓':' · 정답 확인 필요'}</span></div><div class="v3-stem">${v3Esc(p.stem||'문제 문장을 충분히 인식하지 못했습니다. 원문 보기를 확인해 주세요.')}</div><div class="v3-options">${opts}</div>${cnt<4?'<div class="v3-warning">보기 일부가 제대로 분리되지 않았습니다. 「텍스트 다시 추출」 또는 「원문 보기」로 확인해 주세요.</div>':''}<div id="v3Explanation" class="v3-explanation hidden"><h3>해설</h3><div>${v3Esc(p.explanation||'해설 텍스트가 충분히 인식되지 않았습니다. 원문 보기를 확인해 주세요.')}</div></div>`;
+  v3SetStatus('문제 준비 완료',100,'ok');
+}
+renderTextPage=async function(item,full=false,force=false){
+  const token=++renderToken,loading=document.getElementById('loading'),card=document.getElementById('textCard');loading.classList.remove('hidden');card.classList.add('hidden');card.innerHTML='';v3SetStatus(force?'고화질로 다시 인식 중…':'문제 준비 중…',null);
+  try{const p=await v3Recognize(item,!!force);if(token!==renderToken)return;v3RenderProblem(p);if(full)document.getElementById('v3Explanation')?.classList.remove('hidden')}
+  catch(e){console.error(e);if(token!==renderToken)return;loading.classList.add('hidden');card.classList.remove('hidden');card.innerHTML=`<div class="v3-warning"><b>문제 인식에 실패했습니다.</b><br>${v3Esc(e.message||e)}<br><br>원문 보기를 눌러 확인해 주세요.</div>`;v3SetStatus('문제 인식 실패',0,'warn');try{const page=await getPdfPage(item);await v3RenderFull(page,1800)}catch(_){}}
+};
+reloadCurrentText=async function(force=false){const item=queue[idx];if(item)await renderTextPage(item,revealed,!!force)};
+function v3RevealExplanation(){document.getElementById('v3Explanation')?.classList.remove('hidden')}
+function v3MarkOptions(key,sel){document.querySelectorAll('.v3-option').forEach(b=>{const n=Number(b.dataset.n);b.disabled=true;if(n===key)b.classList.add('correct');if(n===sel&&sel!==key)b.classList.add('wrong');else if(n===sel)b.classList.add('selected')})}
+recordAndShow=function(correct,key,self){
+  const item=queue[idx];if(session.some(x=>x._idx===idx))return;session.push({...item,_idx:idx,selected:currentSelected,key:key||null,correct,unknown:self&&!key});markStudied(item,correct);if(!correct)addReviewKey(keyOf(item));
+  document.getElementById('feedback').innerHTML=`<div class="resultbox ${correct?'correct':'wrong'}"><div class="verdict">${correct?'정답입니다 ✓':'오답입니다'}</div><div>정답 <b>${circled(key)}</b> · 내 답 <b>${circled(currentSelected)}</b></div></div>`;v3MarkOptions(key,currentSelected);v3RevealExplanation();document.getElementById('nextBtn').classList.remove('hidden');document.getElementById('revealBtn').classList.add('hidden');save();renderSetupInfo();
+};
+showKeyTrainer=function(){
+  const fb=document.getElementById('feedback');if(fb.querySelector('.v3-keyrow'))return;
+  fb.innerHTML+=`<div class="resultbox" style="margin-top:8px"><div class="learn-key"><b>정답 자동인식 실패 · 원문 하단 정답을 보고 한 번만 등록</b><div class="v3-keyrow"><button class="v3-keybtn" onclick="registerKey(1)">①</button><button class="v3-keybtn" onclick="registerKey(2)">②</button><button class="v3-keybtn" onclick="registerKey(3)">③</button><button class="v3-keybtn" onclick="registerKey(4)">④</button></div></div></div>`;
+};
+registerKey=function(n){state.answerKeys[keyOf(queue[idx])]=n;if(v3Problem){v3Problem.answer=n;cacheSet(v3CacheKey(queue[idx]),v3Problem).catch(()=>{})}save();v3RevealExplanation();if(currentSelected)recordAndShow(currentSelected===n,n,false);else{document.getElementById('feedback').innerHTML=`<div class="resultbox"><b>정답 ${circled(n)} 저장 완료</b></div>`;document.getElementById('nextBtn').classList.remove('hidden');document.getElementById('revealBtn').classList.add('hidden')}};
+chooseAnswer=function(n){
+  if(session.some(x=>x._idx===idx))return;currentSelected=n;document.querySelectorAll('.v3-option').forEach(b=>b.classList.toggle('selected',Number(b.dataset.n)===n));const key=Number(state.answerKeys[keyOf(queue[idx])]||v3Problem?.answer||0);
+  if(key){revealed=true;recordAndShow(n===key,key,false)}else{document.getElementById('feedback').innerHTML=`<div class="resultbox"><b>${circled(n)} 선택</b><div style="margin-top:6px;color:var(--muted)">정답 번호를 자동으로 읽지 못했습니다. 원문 하단의 정답을 확인해 한 번만 등록해 주세요.</div></div>`;showKeyTrainer()}
+};
+revealAnswer=function(){
+  revealed=true;v3RevealExplanation();const key=Number(state.answerKeys[keyOf(queue[idx])]||v3Problem?.answer||0);
+  if(key){v3MarkOptions(key,currentSelected);if(currentSelected)recordAndShow(currentSelected===key,key,false);else{document.getElementById('feedback').innerHTML=`<div class="resultbox"><b>정답 ${circled(key)}</b><div style="margin-top:6px">답을 선택하지 않아 채점에는 포함하지 않습니다.</div></div>`;recordUnknown(key)}}else{const w=document.getElementById('originalWrap');if(w.classList.contains('hidden'))toggleOriginal();showKeyTrainer()}
+};
+
+function v3InitUi(){
+  const setup=document.getElementById('setup'),grid=setup?.querySelector('.file-grid');if(grid&&!document.getElementById('v3StorageNote')){const n=document.createElement('div');n.id='v3StorageNote';n.className='v3-storage-note';n.textContent='저장된 교재를 확인하는 중…';grid.parentNode.insertBefore(n,grid)}
+  const foot=setup?.querySelector('.footnote');if(foot)foot.textContent='※ PDF와 추출 텍스트는 GitHub로 업로드되지 않습니다. PDF는 현재 브라우저의 IndexedDB에만 저장되며, 브라우저 데이터 삭제·저장공간 정리 시 다시 선택해야 할 수 있습니다.';
+  const dataMini=document.querySelector('#data .grid2');if(dataMini&&!document.getElementById('v3PdfDelete')){const div=document.createElement('div');div.className='mini';div.innerHTML='<b>기기 저장 교재</b><div class="data-help">최초 선택한 PDF 2개를 이 브라우저에 저장합니다. 같은 기기·같은 브라우저에서는 다음 접속 때 자동으로 불러옵니다.</div><div class="action-row"><button id="v3PdfDelete" class="btn red small" onclick="v3RemoveSavedPdfs()">저장된 PDF 삭제</button></div>';dataMini.appendChild(div)}
+  v3StorageNote();
+}
+v3InitUi();v3RestorePromise=v3RestorePdfs();v3RestorePromise.catch(e=>{console.warn(e);const n=document.getElementById('v3StorageNote');if(n)n.textContent='저장된 교재 확인 실패 · PDF를 다시 선택해 주세요.'});
 </script>
 </body>
 </html>

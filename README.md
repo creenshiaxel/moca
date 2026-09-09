@@ -1,29 +1,12 @@
-# MOCA GitHub Pages 배포용
+# 교정학 · 형사정책 MOCA TEXT v2
 
-## 업로드
-이 폴더 안의 파일을 GitHub 저장소 최상위(root)에 모두 올립니다.
+GitHub Pages용 텍스트 학습 버전입니다.
 
-필수 파일:
-- index.html
-- manifest.webmanifest
-- sw.js
-- icon-180.png
-- icon-192.png
-- icon-512.png
-- .nojekyll
+- PDF 파일은 GitHub에 올리지 않습니다.
+- 사이트 실행 후 본인 기기에서 PDF 2개를 직접 선택합니다.
+- PDF 텍스트 레이어를 우선 읽고, 스캔 페이지는 브라우저 내부 Tesseract OCR(kor+eng)로 처리합니다.
+- 추출 텍스트는 IndexedDB에 기기별로 캐시됩니다.
+- 원문 확인 버튼으로 PDF 페이지를 언제든 확인할 수 있습니다.
+- 학습기록/오답/필수복습/정답키는 브라우저에 저장됩니다.
 
-## GitHub Pages 켜기
-1. 저장소 → Settings → Pages
-2. Build and deployment → Source: Deploy from a branch
-3. Branch: main / (root)
-4. Save
-5. 생성된 https://사용자이름.github.io/저장소이름/ 주소로 접속
-
-## 사용
-- PC: Chrome/Edge에서 위 주소 접속
-- iPhone: Safari에서 위 주소 접속 → 공유 → 홈 화면에 추가
-- 학습기록은 각 기기의 브라우저 localStorage에 따로 저장됩니다.
-- 교재 PDF는 기기에서 직접 선택해서 연결합니다. PDF 파일 자체는 서버로 업로드되지 않습니다.
-
-## 업데이트
-파일 수정 후 GitHub에 다시 commit/push하면 Pages가 자동 갱신됩니다.
+GitHub Pages에는 이 폴더의 프로그램 파일만 업로드하고 교재 PDF는 업로드하지 마세요.
